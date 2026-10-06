@@ -44,7 +44,8 @@ const style = computed(() => ({
 
 const tip = computed(() => {
   const weight = BLEACH_WEIGHT[props.level]
-  return `白化等级「${props.level}」（权重 ${weight}）${props.coverCm === undefined ? '' : `，覆盖 ${props.coverCm} cm`}`
+  const indexNote = props.level === '死亡' ? '，不参与白化指数（指数只按无 / 轻 / 中 / 重）' : `（白化指数权重 ${weight}，0 ~ 3）`
+  return `白化等级「${props.level}」${indexNote}${props.coverCm === undefined ? '' : `，覆盖 ${props.coverCm} cm`}`
 })
 
 const coverText = computed(() => (props.coverCm === undefined ? '' : `${props.coverCm} cm`))

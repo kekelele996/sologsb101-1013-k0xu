@@ -23,7 +23,7 @@ import {
   parseCoralPaste
 } from '@/types/coralRecord'
 import type { BleachLevel, CoralForm, CoralRecord } from '@/types/coralRecord'
-import { BLEACH_BG, BLEACH_COLOR, bleachGrade, bleachIndex, bleachedSharePct, coralCoveragePct, groupByForm, groupByGenus } from '@/utils/bleach'
+import { BLEACH_BG, BLEACH_COLOR, bleachGrade, bleachIndex, groupByForm, groupByGenus, summarizeCoralCover } from '@/utils/bleach'
 import { initDatabase } from '@/utils/db'
 
 const route = useRoute()
@@ -59,7 +59,7 @@ const genusGroups = computed(() =>
   groupByGenus(records.value).map((group) => {
     const list = records.value.filter((record) => record.genus === group.genus)
     const index = bleachIndex(list)
-    return { ...group, count: list.length, bleachIndex: index, grade: bleachGrade(index) }
+    return { ...group, count: list.length, bleachIndex: index, grade: bleachGrade(index, list.length > 0) }
   })
 )
 
@@ -68,29 +68,30 @@ const formGroups = computed(() => groupByForm(records.value))
 
 const stats = computed(() => {
   const list = records.value
-  const coverCmTotal = list.reduce((sum, record) => sum + record.coverCm, 0)
-  const index = bleachIndex(list)
+  const lengthM = belt.value?.lengthM ?? 0
+  const summary = summarizeCoralCover(list, lengthM)
   return {
-    coralCount: list.length,
-    coverCmTotal,
-    coveragePct: belt.value ? coralCoveragePct(coverCmTotal, belt.value.lengthM) : 0,
-    bleachIndex: index,
-    grade: bleachGrade(index),
-    bleachedSharePct: bleachedSharePct(list),
+    coralCount: summary.coralCount,
+    coverCmTotal: summary.coverCmTotal,
+    liveCoverCm: summary.liveCoverCm,
+    deadCoverCm: summary.deadCoverCm,
+    liveCoveragePct: summary.liveCoveragePct,
+    deadCoveragePct: summary.deadCoveragePct,
+    bleachIndex: summary.bleachIndex,
+    grade: summary.grade,
+    bleachedSharePct: summary.bleachedSharePct,
+    distribution: summary.distribution,
     maxCoverCm: list.length ? Math.max(...list.map((record) => record.coverCm)) : 0
   }
 })
 
-/** 白化等级 → 累计覆盖长度 */
-const distribution = computed<Record<BleachLevel, number>>(() => {
-  const result: Record<BleachLevel, number> = { 无: 0, 轻: 0, 中: 0, 重: 0, 死亡: 0 }
-  BLEACH_LEVELS.forEach((level) => {
-    result[level] = records.value
-      .filter((record) => record.bleachLevel === level)
-      .reduce((sum, record) => sum + record.coverCm, 0)
-  })
-  return result
-})
+/** 白化等级 → 累计覆盖长度（无 / 轻 / 中 / 重 / 死亡） */
+const distribution = computed<Record<BleachLevel, number>>(() => stats.value.distribution)
+
+/** 白化指数展示：全死亡样带无指数 */
+const bleachIndexText = computed(() =>
+  stats.value.bleachIndex === null ? (stats.value.coralCount > 0 ? '—（全部死亡）' : '—') : stats.value.bleachIndex
+)
 
 /** 进度条宽度（%），总量为 0 时返回 0% */
 function barPercent(value: number, total: number): string {
@@ -145,7 +146,7 @@ async function submitForm(): Promise<void> {
       ElMessage.success('珊瑚记录已更新')
     } else {
       await surveyStore.createCoral(beltId.value, payload)
-      ElMessage.success('珊瑚记录已新增，覆盖率与白化占比已重算')
+      ElMessage.success('珊瑚记录已新增，活珊瑚覆盖率、死亡覆盖与白化指数已重算')
     }
     dialogVisible.value = false
   } finally {
@@ -271,7 +272,7 @@ onMounted(() => {
             <el-tag size="small" type="info" effect="plain">{{ belt.surveyDate }}</el-tag>
           </h2>
           <p class="gb-hint">
-            按属名与形态逐条录入覆盖长度与白化等级；覆盖率 = 覆盖长度合计 / 样带长度，白化指数按覆盖长度加权。
+            按属名与形态逐条录入覆盖长度与白化等级；活珊瑚覆盖率 = 活珊瑚（无 / 轻 / 中 / 重）覆盖长度合计 / 样带长度，死亡覆盖单列；白化指数仅按无 / 轻 / 中 / 重加权（0 ~ 3）。
           </p>
         </div>
         <div class="page__actions">
@@ -284,16 +285,22 @@ onMounted(() => {
       <div class="gb-stats-row">
         <StatBadge label="珊瑚记录" :value="stats.coralCount" suffix="条" icon="Histogram" />
         <StatBadge label="覆盖长度合计" :value="stats.coverCmTotal" suffix="cm" tone="info" icon="Odometer" />
-        <StatBadge label="珊瑚覆盖率" :value="stats.coveragePct" suffix="%" :percent="Math.min(100, stats.coveragePct)" tone="success" icon="PieChart" />
+        <StatBadge label="活珊瑚覆盖率" :value="stats.liveCoveragePct" suffix="%" :percent="Math.min(100, stats.liveCoveragePct)" tone="success" icon="PieChart" />
+        <StatBadge label="活珊瑚覆盖" :value="stats.liveCoverCm" suffix="cm" tone="success" icon="PieChart" />
+        <StatBadge label="死亡覆盖" :value="stats.deadCoverCm" :suffix="`cm（${stats.deadCoveragePct}%）`" tone="danger" icon="WarningFilled" />
         <StatBadge
           label="白化指数"
-          :value="stats.bleachIndex"
-          suffix="/ 4"
-          :tone="stats.bleachIndex > 1 ? 'warning' : 'success'"
-          :icon="stats.bleachIndex > 1 ? 'WarningFilled' : 'DataLine'"
+          :value="bleachIndexText"
+          suffix=""
+          :tone="stats.bleachIndex !== null && stats.bleachIndex > 1 ? 'warning' : 'success'"
+          :icon="stats.bleachIndex !== null && stats.bleachIndex > 1 ? 'WarningFilled' : 'DataLine'"
         />
-        <StatBadge label="白化占比" :value="stats.bleachedSharePct" suffix="%" tone="warning" icon="TrendCharts" />
+        <StatBadge label="活珊瑚白化占比" :value="stats.bleachedSharePct" suffix="%" tone="warning" icon="TrendCharts" />
       </div>
+
+      <p v-if="stats.coralCount > 0 && stats.liveCoverCm === 0" class="gb-hint page__dead-note">
+        该样带珊瑚记录全部为死亡：活珊瑚覆盖率记 0%，白化指数无值、不参与礁区白化评定；死亡覆盖 {{ stats.deadCoverCm }} cm（{{ stats.deadCoveragePct }}%）已单列标出。
+      </p>
 
       <el-card v-if="records.length > 0" shadow="never" class="gb-panel">
         <div class="gb-panel-title">
@@ -319,7 +326,7 @@ onMounted(() => {
                 </span>
                 <span class="gb-mono">
                   {{ group.coverCm }} cm · {{ group.count }} 条
-                  <BleachTag :level="group.grade" size="small" :plain="true" />
+                  <BleachTag v-if="group.grade" :level="group.grade" size="small" :plain="true" />
                 </span>
               </div>
             </div>
@@ -340,7 +347,7 @@ onMounted(() => {
             </div>
           </div>
           <div>
-            <h4 class="page__sub">白化等级分布（覆盖长度 cm）</h4>
+            <h4 class="page__sub">白化等级分布（覆盖长度 cm，含死亡）</h4>
             <div class="gb-bars">
               <div v-for="level in BLEACH_LEVELS" :key="`bar-${level}`" class="gb-bar">
                 <span>{{ level }}</span>
@@ -353,6 +360,7 @@ onMounted(() => {
                 <span class="gb-mono">{{ distribution[level] }} cm</span>
               </div>
             </div>
+            <p class="gb-hint">活珊瑚覆盖 {{ stats.liveCoverCm }} cm · 死亡覆盖 {{ stats.deadCoverCm }} cm（不计入活珊瑚覆盖率与白化指数）</p>
           </div>
         </div>
       </el-card>
@@ -551,5 +559,14 @@ onMounted(() => {
   margin-top: 10px;
   max-height: 160px;
   overflow: auto;
+}
+
+.page__dead-note {
+  margin: 0;
+  padding: 8px 12px;
+  border-left: 3px solid #7b241c;
+  background: #f6e4e2;
+  border-radius: 6px;
+  color: #7b241c;
 }
 </style>

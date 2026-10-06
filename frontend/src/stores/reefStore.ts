@@ -197,17 +197,24 @@ export const useReefStore = defineStore('reef', () => {
     if (currentSiteId.value === id) selectSite(null)
   }
 
-  /** 站位 id → 样带数与平均白化指数（列表回显用） */
-  async function siteBleachAverages(): Promise<Record<string, number>> {
-    const result: Record<string, number> = {}
+  /** 站位 id → 样带数与平均白化指数（列表回显用；无记录样带不进平均，无参评样带为 null） */
+  async function siteBleachAverages(): Promise<Record<string, number | null>> {
+    const result: Record<string, number | null> = {}
     for (const site of sites.value) {
       const beltIds = (await db.belts.where('siteId').equals(site.id).toArray()).map((row) => row.id)
       if (beltIds.length === 0) {
-        result[site.id] = 0
+        result[site.id] = null
         continue
       }
-      const corals = await db.corals.where('beltId').anyOf(beltIds).toArray()
-      result[site.id] = round(bleachIndex(corals), 2)
+      const indices: number[] = []
+      for (const beltId of beltIds) {
+        const corals = await db.corals.where('beltId').equals(beltId).toArray()
+        const index = bleachIndex(corals)
+        // 无珊瑚记录样带不进平均；全死亡样带指数为 null 也不贡献
+        if (index !== null) indices.push(index)
+      }
+      result[site.id] =
+        indices.length === 0 ? null : round(indices.reduce((sum, value) => sum + value, 0) / indices.length, 2)
     }
     return result
   }

@@ -17,7 +17,7 @@ import { ORIENTATION_ORDER, useBeltStore } from '@/stores/beltStore'
 import { useSurveyStore } from '@/stores/surveyStore'
 import { BELT_LENGTH_PRESETS, ORIENTATIONS } from '@/types/belt'
 import type { Belt, Orientation } from '@/types/belt'
-import { bleachGrade, bleachIndex, coralCoveragePct, fishDensity } from '@/utils/bleach'
+import { fishDensity, summarizeCoralCover } from '@/utils/bleach'
 import { initDatabase } from '@/utils/db'
 
 const route = useRoute()
@@ -41,22 +41,23 @@ const form = reactive({
   observer: ''
 })
 
-/** 样带行：回显珊瑚记录数、鱼类记录数、覆盖率与白化指数 */
+/** 样带行：回显珊瑚记录数、鱼类记录数、活珊瑚 / 死亡覆盖与白化指数 */
 const rows = computed(() =>
   beltStore.beltsOfSite(siteId.value).map((belt) => {
     const corals = surveyStore.coralsOfBelt(belt.id)
     const fishes = surveyStore.fishesOfBelt(belt.id)
-    const coverCmTotal = corals.reduce((sum, coral) => sum + coral.coverCm, 0)
-    const index = bleachIndex(corals)
+    const summary = summarizeCoralCover(corals, belt.lengthM)
     const fishTotal = fishes.filter((fish) => fish.category === '鱼类').reduce((sum, fish) => sum + fish.count, 0)
     return {
       belt,
       coralCount: corals.length,
       fishCount: fishes.length,
-      coverCmTotal,
-      coveragePct: coralCoveragePct(coverCmTotal, belt.lengthM),
-      bleachIndex: index,
-      grade: bleachGrade(index),
+      liveCoverCm: summary.liveCoverCm,
+      deadCoverCm: summary.deadCoverCm,
+      liveCoveragePct: summary.liveCoveragePct,
+      deadCoveragePct: summary.deadCoveragePct,
+      bleachIndex: summary.bleachIndex,
+      grade: summary.grade,
       fishDensity: fishDensity(fishTotal, belt.lengthM)
     }
   })
@@ -295,16 +296,20 @@ onMounted(() => {
             </el-button>
           </template>
         </el-table-column>
-        <el-table-column label="珊瑚覆盖率" width="130" align="right">
+        <el-table-column label="活珊瑚覆盖率" width="150" align="right">
           <template #default="{ row }">
-            <span class="gb-mono">{{ row.coveragePct }}%</span>
-            <div class="gb-hint gb-mono">{{ row.coverCmTotal }} cm</div>
+            <span class="gb-mono">{{ row.liveCoveragePct }}%</span>
+            <div class="gb-hint gb-mono">活 {{ row.liveCoverCm }} cm</div>
+            <div v-if="row.deadCoverCm > 0" class="gb-hint gb-mono page__dead-text">死 {{ row.deadCoverCm }} cm（{{ row.deadCoveragePct }}%）</div>
           </template>
         </el-table-column>
-        <el-table-column label="白化" width="150">
+        <el-table-column label="白化" width="170">
           <template #default="{ row }">
-            <BleachTag :level="row.grade" size="small" />
-            <div class="gb-hint gb-mono">指数 {{ row.bleachIndex }}</div>
+            <BleachTag v-if="row.grade" :level="row.grade" size="small" />
+            <span v-else class="gb-hint">未评定</span>
+            <div class="gb-hint gb-mono">
+              指数 {{ row.bleachIndex === null ? (row.coralCount > 0 ? '—（全死亡）' : '—') : row.bleachIndex }}
+            </div>
           </template>
         </el-table-column>
         <el-table-column label="操作" width="260" fixed="right">
@@ -406,5 +411,9 @@ onMounted(() => {
   flex-wrap: wrap;
   gap: 2px;
   margin-top: 4px;
+}
+
+.page__dead-text {
+  color: #7b241c;
 }
 </style>

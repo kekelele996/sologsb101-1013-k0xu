@@ -19,7 +19,7 @@ import { useBeltStore } from '@/stores/beltStore'
 import { useSurveyStore } from '@/stores/surveyStore'
 import { AREA_BUCKETS, createEmptyReefFilter, PROTECT_STATUSES } from '@/types/reef'
 import type { ProtectStatus, Reef } from '@/types/reef'
-import { bleachGrade, bleachIndex } from '@/utils/bleach'
+import { aggregateBleach, bleachIndex } from '@/utils/bleach'
 import { initDatabase } from '@/utils/db'
 
 const route = useRoute()
@@ -40,7 +40,7 @@ const form = reactive({
   manager: ''
 })
 
-/** 礁区卡片：汇总站位/样带/珊瑚记录数与平均白化指数 */
+/** 礁区卡片：汇总站位/样带/珊瑚记录数与平均白化指数（无珊瑚记录样带不进平均） */
 const cards = computed(() =>
   reefStore.filteredReefs.map((reef: Reef) => {
     const sites = reefStore.sites.filter((site) => site.reefId === reef.id)
@@ -49,15 +49,30 @@ const cards = computed(() =>
     const beltIds = new Set(belts.map((belt) => belt.id))
     const corals = surveyStore.corals.filter((coral) => beltIds.has(coral.beltId))
     const fishes = surveyStore.fishes.filter((fish) => beltIds.has(fish.beltId))
-    const index = bleachIndex(corals)
+    const aggregate = aggregateBleach(
+      belts.map((belt) => ({
+        hasRecords: corals.some((coral) => coral.beltId === belt.id),
+        bleachIndex: bleachIndex(corals.filter((coral) => coral.beltId === belt.id))
+      }))
+    )
+    const deadCoverCm = corals
+      .filter((coral) => coral.bleachLevel === '死亡')
+      .reduce((sum, coral) => sum + coral.coverCm, 0)
+    const liveCoverCm = corals
+      .filter((coral) => coral.bleachLevel !== '死亡')
+      .reduce((sum, coral) => sum + coral.coverCm, 0)
     return {
       reef,
       siteCount: sites.length,
       beltCount: belts.length,
+      assessedBeltCount: aggregate.assessedBeltCount,
+      allDeadBeltCount: aggregate.allDeadBeltCount,
       coralCount: corals.length,
+      liveCoverCm,
+      deadCoverCm,
       fishTotal: fishes.reduce((sum, fish) => sum + fish.count, 0),
-      bleachIndex: index,
-      grade: bleachGrade(index)
+      bleachIndex: aggregate.avgBleachIndex,
+      grade: aggregate.grade
     }
   })
 )
@@ -69,16 +84,19 @@ const filterModel = computed<FilterModel>(() => ({
   maxAreaKm2: reefStore.filter.maxAreaKm2
 }))
 
-const totals = computed(() => ({
-  reefs: cards.value.length,
-  sites: cards.value.reduce((sum, card) => sum + card.siteCount, 0),
-  belts: cards.value.reduce((sum, card) => sum + card.beltCount, 0),
-  corals: cards.value.reduce((sum, card) => sum + card.coralCount, 0),
-  avgBleachIndex:
-    cards.value.length === 0
-      ? 0
-      : Number((cards.value.reduce((sum, card) => sum + card.bleachIndex, 0) / cards.value.length).toFixed(2))
-}))
+const totals = computed(() => {
+  const assessed = cards.value.filter((card) => card.bleachIndex !== null)
+  return {
+    reefs: cards.value.length,
+    sites: cards.value.reduce((sum, card) => sum + card.siteCount, 0),
+    belts: cards.value.reduce((sum, card) => sum + card.beltCount, 0),
+    corals: cards.value.reduce((sum, card) => sum + card.coralCount, 0),
+    avgBleachIndex:
+      assessed.length === 0
+        ? null
+        : Number((assessed.reduce((sum, card) => sum + (card.bleachIndex ?? 0), 0) / assessed.length).toFixed(2))
+  }
+})
 
 async function syncQuery(): Promise<void> {
   const query = buildQuery({
@@ -250,10 +268,10 @@ watch(
       <StatBadge label="珊瑚记录" :value="totals.corals" suffix="条" icon="Histogram" />
       <StatBadge
         label="平均白化指数"
-        :value="totals.avgBleachIndex"
-        suffix="/ 4"
-        :tone="totals.avgBleachIndex > 1 ? 'warning' : 'success'"
-        :icon="totals.avgBleachIndex > 1 ? 'WarningFilled' : 'DataLine'"
+        :value="totals.avgBleachIndex === null ? '—' : totals.avgBleachIndex"
+        suffix="/ 3"
+        :tone="totals.avgBleachIndex !== null && totals.avgBleachIndex > 1 ? 'warning' : 'success'"
+        :icon="totals.avgBleachIndex !== null && totals.avgBleachIndex > 1 ? 'WarningFilled' : 'DataLine'"
       />
     </div>
 
@@ -279,7 +297,8 @@ watch(
               <strong class="reef-card__name">{{ card.reef.name }}</strong>
               <el-tag size="small" effect="plain" class="reef-card__status">{{ card.reef.protectStatus }}</el-tag>
             </div>
-            <BleachTag :level="card.grade" size="small" />
+            <BleachTag v-if="card.grade" :level="card.grade" size="small" />
+            <span v-else class="gb-hint">无记录样带</span>
           </div>
         </template>
 
@@ -289,10 +308,10 @@ watch(
           <StatBadge label="珊瑚记录" :value="card.coralCount" suffix="条" size="small" tone="success" icon="Histogram" />
           <StatBadge
             label="白化指数"
-            :value="card.bleachIndex"
-            suffix="/ 4"
+            :value="card.bleachIndex === null ? '—' : card.bleachIndex"
+            suffix="/ 3"
             size="small"
-            :tone="card.bleachIndex > 1 ? 'warning' : 'success'"
+            :tone="card.bleachIndex !== null && card.bleachIndex > 1 ? 'warning' : 'success'"
             icon="TrendCharts"
           />
         </div>
@@ -300,6 +319,9 @@ watch(
         <div class="reef-card__meta">
           <span>面积 <b class="gb-mono">{{ card.reef.areaKm2 }}</b> km²</span>
           <span>鱼获计数 <b class="gb-mono">{{ card.fishTotal }}</b></span>
+          <span>活珊瑚覆盖 <b class="gb-mono">{{ card.liveCoverCm }}</b> cm</span>
+          <span :class="{ 'reef-card__dead': card.deadCoverCm > 0 }">死亡覆盖 <b class="gb-mono">{{ card.deadCoverCm }}</b> cm</span>
+          <span v-if="card.allDeadBeltCount > 0" class="reef-card__dead">全死亡样带 {{ card.allDeadBeltCount }} 条</span>
           <span v-if="card.reef.manager">管理单位：{{ card.reef.manager }}</span>
         </div>
 
@@ -421,6 +443,10 @@ watch(
   gap: 14px;
   font-size: 13px;
   color: #4c6663;
+}
+
+.reef-card__dead {
+  color: #7b241c;
 }
 
 .reef-card__location {

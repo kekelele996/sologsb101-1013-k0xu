@@ -145,8 +145,9 @@ interface SeedBelt {
 }
 
 /**
- * 播种演示数据：3 个礁区 → 4 个站位 → 5 条样带 → 14 条珊瑚记录 + 12 条鱼类计数，
- * 覆盖无 / 轻 / 中 / 重 / 死亡 全部白化等级，保证每个页面打开都有内容、层级路由也能命中真实 id。
+ * 播种演示数据：3 个礁区 → 5 个站位 → 7 条样带 → 16 条珊瑚记录 + 16 条鱼类计数，
+ * 覆盖无 / 轻 / 中 / 重 / 死亡 全部白化等级，并含 1 条全死亡样带（活珊瑚覆盖率 0、死亡覆盖单列）
+ * 与 1 条无珊瑚记录样带（不参与礁区白化指数），保证每个页面打开都有内容、层级路由也能命中真实 id。
  */
 export async function seedDemoData(): Promise<void> {
   const now = Date.now()
@@ -215,6 +216,15 @@ export async function seedDemoData(): Promise<void> {
       lng: 110.4913,
       depthM: 6.8,
       substrate: '岩礁'
+    },
+    {
+      id: 'site_dz_02',
+      reefId: 'reef_dz03',
+      no: 'S-02',
+      lat: 18.6688,
+      lng: 110.4972,
+      depthM: 9.1,
+      substrate: '礁砂'
     }
   ]
 
@@ -310,6 +320,37 @@ export async function seedDemoData(): Promise<void> {
       fishes: [
         { id: 'fsh_dz01a_1', beltId: 'belt_dz01_a', family: '雀鲷科', count: 34, sizeClass: '0-10cm', category: '鱼类' },
         { id: 'fsh_dz01a_2', beltId: 'belt_dz01_a', family: '海星科', count: 5, sizeClass: '11-20cm', category: '无脊椎动物' }
+      ]
+    },
+    {
+      // 全死亡样带：活珊瑚覆盖率记 0、白化指数无值，死亡覆盖单列且不参与礁区指数
+      id: 'belt_dz02_a',
+      siteId: 'site_dz_02',
+      no: 'T-01',
+      lengthM: 25,
+      orientation: '南',
+      surveyDate: today,
+      observer: '陈立群',
+      corals: [
+        { id: 'cor_dz02a_1', beltId: 'belt_dz02_a', genus: '鹿角珊瑚属', form: '枝状', coverCm: 900, bleachLevel: '死亡', remark: '整丛白骨化，藻膜覆盖' },
+        { id: 'cor_dz02a_2', beltId: 'belt_dz02_a', genus: '滨珊瑚属', form: '块状', coverCm: 350, bleachLevel: '死亡', remark: '仅存骨骼' }
+      ],
+      fishes: [
+        { id: 'fsh_dz02a_1', beltId: 'belt_dz02_a', family: '雀鲷科', count: 9, sizeClass: '0-10cm', category: '鱼类' }
+      ]
+    },
+    {
+      // 无珊瑚记录样带：不参与礁区白化指数
+      id: 'belt_dz02_b',
+      siteId: 'site_dz_02',
+      no: 'T-02',
+      lengthM: 25,
+      orientation: '北',
+      surveyDate: today,
+      observer: '陈立群',
+      corals: [],
+      fishes: [
+        { id: 'fsh_dz02b_1', beltId: 'belt_dz02_b', family: '蝴蝶鱼科', count: 6, sizeClass: '11-20cm', category: '鱼类' }
       ]
     }
   ]

@@ -20,7 +20,7 @@ import { useBeltStore } from '@/stores/beltStore'
 import { useSurveyStore } from '@/stores/surveyStore'
 import { formatLatLng, SUBSTRATES, validateLatLng } from '@/types/site'
 import type { Site } from '@/types/site'
-import { bleachGrade, bleachIndex } from '@/utils/bleach'
+import { aggregateBleach, bleachIndex } from '@/utils/bleach'
 import { initDatabase } from '@/utils/db'
 
 const route = useRoute()
@@ -56,14 +56,20 @@ const rows = computed(() => {
     const belts = beltStore.beltsOfSite(site.id)
     const beltIds = new Set(belts.map((belt) => belt.id))
     const corals = surveyStore.corals.filter((coral) => beltIds.has(coral.beltId))
-    const index = bleachIndex(corals)
+    // 白化评定按样带汇总：无珊瑚记录样带不进平均，全死亡样带标「死亡」但不贡献指数
+    const aggregate = aggregateBleach(
+      belts.map((belt) => {
+        const beltCorals = corals.filter((coral) => coral.beltId === belt.id)
+        return { hasRecords: beltCorals.length > 0, bleachIndex: bleachIndex(beltCorals) }
+      })
+    )
     return {
       site,
       beltCount: belts.length,
       beltLengthM: belts.reduce((sum, belt) => sum + belt.lengthM, 0),
       coralCount: corals.length,
-      bleachIndex: index,
-      grade: bleachGrade(index)
+      bleachIndex: aggregate.avgBleachIndex,
+      grade: aggregate.grade
     }
   })
 })
@@ -303,10 +309,13 @@ onMounted(() => {
             <span class="gb-mono">{{ row.coralCount }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="平均白化" width="150">
+        <el-table-column label="平均白化" width="170">
           <template #default="{ row }">
-            <BleachTag :level="row.grade" :size="'small'" />
-            <span class="gb-hint gb-mono"> {{ row.bleachIndex }}</span>
+            <BleachTag v-if="row.grade" :level="row.grade" :size="'small'" />
+            <span v-else class="gb-hint">无记录样带</span>
+            <span class="gb-hint gb-mono">
+              指数 {{ row.bleachIndex === null ? '—' : row.bleachIndex }}
+            </span>
           </template>
         </el-table-column>
         <el-table-column label="操作" width="240" fixed="right">

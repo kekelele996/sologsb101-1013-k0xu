@@ -12,10 +12,14 @@ import {
   type BackupPayload
 } from '@/utils/db'
 import {
-  BLEACH_LEVELS,
   type BleachLevel
 } from '@/types/coralRecord'
-import { bleachGrade, bleachIndex, bleachedSharePct, coralCoveragePct, fishDensity, round } from '@/utils/bleach'
+import {
+  aggregateBleach,
+  fishDensity,
+  round,
+  summarizeCoralCover
+} from '@/utils/bleach'
 
 /** 备份集合键名 */
 export const BACKUP_KEYS = ['reefs', 'sites', 'belts', 'corals', 'fishes'] as const
@@ -161,7 +165,7 @@ export function remapIds(payload: BackupPayload): BackupPayload {
 /** 白化等级分布：各等级累计覆盖长度 */
 export type BleachDistribution = Record<BleachLevel, number>
 
-/** 覆盖度结论行：按样带汇总珊瑚覆盖率、白化占比与鱼类密度 */
+/** 覆盖度结论行：按样带汇总结活珊瑚 / 死亡珊瑚覆盖、白化评定与鱼类密度 */
 export interface CoverageLine {
   beltId: string
   beltNo: string
@@ -174,14 +178,21 @@ export interface CoverageLine {
   surveyDate: string
   observer: string
   coralCount: number
+  /** 全部珊瑚覆盖长度合计（含死亡，cm） */
   coverCmTotal: number
-  /** 珊瑚覆盖率（%） */
-  coveragePct: number
-  /** 白化指数 0 ~ 4 */
-  bleachIndex: number
-  /** 总体白化等级 */
-  grade: BleachLevel
-  /** 白化占比（%，覆盖长度加权） */
+  /** 活珊瑚覆盖长度（cm） */
+  liveCoverCm: number
+  /** 死亡珊瑚覆盖长度（cm） */
+  deadCoverCm: number
+  /** 活珊瑚覆盖率（%，不含死亡） */
+  liveCoveragePct: number
+  /** 死亡覆盖率（%） */
+  deadCoveragePct: number
+  /** 白化指数 0 ~ 3；全死亡 / 无记录为 null */
+  bleachIndex: number | null
+  /** 总体白化等级；无记录为 null，全死亡为「死亡」 */
+  grade: BleachLevel | null
+  /** 活珊瑚白化占比（%） */
   bleachedSharePct: number
   distribution: BleachDistribution
   fishTotal: number
@@ -214,23 +225,12 @@ export function buildCoverageLines(payload: BackupPayload): CoverageLine[] {
       const reef = site ? reefById.get(site.reefId) : undefined
       const corals = coralsByBelt.get(belt.id) ?? []
       const fishes = fishesByBelt.get(belt.id) ?? []
-      const coverCmTotal = round(
-        corals.reduce((sum, coral) => sum + coral.coverCm, 0),
-        1
-      )
-      const index = bleachIndex(corals)
-      const grade = bleachGrade(index)
-      const distribution: BleachDistribution = { 无: 0, 轻: 0, 中: 0, 重: 0, 死亡: 0 }
-      BLEACH_LEVELS.forEach((level) => {
-        distribution[level] = round(
-          corals.filter((coral) => coral.bleachLevel === level).reduce((sum, coral) => sum + coral.coverCm, 0),
-          1
-        )
-      })
+      const summary = summarizeCoralCover(corals, belt.lengthM)
       const fishTotal = fishes.filter((fish) => fish.category === '鱼类').reduce((sum, fish) => sum + fish.count, 0)
       const invertebrateTotal = fishes
         .filter((fish) => fish.category === '无脊椎动物')
         .reduce((sum, fish) => sum + fish.count, 0)
+      const conclusion = buildBeltConclusion(summary)
       return {
         beltId: belt.id,
         beltNo: belt.no,
@@ -242,38 +242,70 @@ export function buildCoverageLines(payload: BackupPayload): CoverageLine[] {
         orientation: belt.orientation,
         surveyDate: belt.surveyDate,
         observer: belt.observer,
-        coralCount: corals.length,
-        coverCmTotal,
-        coveragePct: coralCoveragePct(coverCmTotal, belt.lengthM),
-        bleachIndex: index,
-        grade,
-        bleachedSharePct: bleachedSharePct(corals),
-        distribution,
+        coralCount: summary.coralCount,
+        coverCmTotal: summary.coverCmTotal,
+        liveCoverCm: summary.liveCoverCm,
+        deadCoverCm: summary.deadCoverCm,
+        liveCoveragePct: summary.liveCoveragePct,
+        deadCoveragePct: summary.deadCoveragePct,
+        bleachIndex: summary.bleachIndex,
+        grade: summary.grade,
+        bleachedSharePct: summary.bleachedSharePct,
+        distribution: summary.distribution,
         fishTotal,
         invertebrateTotal,
         fishDensity: fishDensity(fishTotal, belt.lengthM),
-        conclusion:
-          corals.length === 0
-            ? '该样带尚未录入珊瑚记录'
-            : grade === '无'
-              ? `珊瑚覆盖率 ${coralCoveragePct(coverCmTotal, belt.lengthM)}%，未见白化`
-              : `珊瑚覆盖率 ${coralCoveragePct(coverCmTotal, belt.lengthM)}%，白化指数 ${index}（${grade}），白化占比 ${bleachedSharePct(corals)}%`
+        conclusion
       }
     })
-    .sort((a, b) => b.bleachIndex - a.bleachIndex)
+    .sort((a, b) => {
+      // 全死亡样带优先标出，其次按白化指数降序，无记录样带排末尾
+      const score = (line: CoverageLine): number => {
+        if (line.coralCount === 0) return -1
+        if (line.bleachIndex === null) return 100
+        return line.bleachIndex
+      }
+      return score(b) - score(a)
+    })
 }
 
-/** 按礁区汇总：站位/样带数量、平均白化指数与总体等级 */
+/**
+ * 单样带文字结论：活珊瑚覆盖率与死亡覆盖分列，白化指数只按无 / 轻 / 中 / 重。
+ */
+function buildBeltConclusion(summary: ReturnType<typeof summarizeCoralCover>): string {
+  if (summary.coralCount === 0) return '该样带尚未录入珊瑚记录，不参与礁区白化指数'
+  const deadPart = summary.deadCoverCm > 0 ? `，死亡覆盖 ${summary.deadCoverCm} cm（死亡覆盖率 ${summary.deadCoveragePct}%）` : ''
+  if (summary.bleachIndex === null) {
+    return `样带珊瑚全部死亡：活珊瑚覆盖率 0%，死亡覆盖 ${summary.deadCoverCm} cm（死亡覆盖率 ${summary.deadCoveragePct}%），不参与礁区白化指数`
+  }
+  if (summary.grade === '无') {
+    return `活珊瑚覆盖率 ${summary.liveCoveragePct}%（活珊瑚覆盖 ${summary.liveCoverCm} cm）${deadPart}，未见白化`
+  }
+  return `活珊瑚覆盖率 ${summary.liveCoveragePct}%（活珊瑚覆盖 ${summary.liveCoverCm} cm）${deadPart}，白化指数 ${summary.bleachIndex}（${summary.grade}，0 ~ 3），白化占比 ${summary.bleachedSharePct}%`
+}
+
+/** 按礁区汇总：站位/样带数量、平均白化指数与总体等级（无珊瑚记录样带不进平均） */
 export interface ReefSummary {
   reefId: string
   reefName: string
   protectStatus: string
   siteCount: number
   beltCount: number
+  /** 有珊瑚记录、参与白化评定的样带数 */
+  assessedBeltCount: number
+  /** 全死亡样带数 */
+  allDeadBeltCount: number
   coralCount: number
+  /** 全部珊瑚覆盖长度合计（含死亡，cm） */
   coverCmTotal: number
-  avgBleachIndex: number
-  grade: BleachLevel
+  /** 活珊瑚覆盖长度（cm） */
+  liveCoverCm: number
+  /** 死亡珊瑚覆盖长度（cm） */
+  deadCoverCm: number
+  /** 平均白化指数 0 ~ 3；无参评样带为 null */
+  avgBleachIndex: number | null
+  /** 总体等级；无参评样带为 null，参评样带全部死亡为「死亡」 */
+  grade: BleachLevel | null
   fishTotal: number
 }
 
@@ -283,23 +315,31 @@ export function buildReefSummaries(payload: BackupPayload, lines: CoverageLine[]
     const beltIds = new Set(payload.belts.filter((belt) => siteIds.has(belt.siteId)).map((belt) => belt.id))
     const corals = payload.corals.filter((coral) => beltIds.has(coral.beltId))
     const lines4Reef = lines.filter((line) => line.reefId === reef.id)
-    const avgBleachIndex =
-      lines4Reef.length === 0
-        ? 0
-        : round(lines4Reef.reduce((sum, line) => sum + line.bleachIndex, 0) / lines4Reef.length, 2)
+    const aggregate = aggregateBleach(
+      lines4Reef.map((line) => ({ hasRecords: line.coralCount > 0, bleachIndex: line.bleachIndex }))
+    )
+    const deadCoverCm = round(
+      corals.filter((coral) => coral.bleachLevel === '死亡').reduce((sum, coral) => sum + coral.coverCm, 0),
+      1
+    )
+    const coverCmTotal = round(
+      corals.reduce((sum, coral) => sum + coral.coverCm, 0),
+      1
+    )
     return {
       reefId: reef.id,
       reefName: reef.name,
       protectStatus: reef.protectStatus,
       siteCount: siteIds.size,
       beltCount: beltIds.size,
+      assessedBeltCount: aggregate.assessedBeltCount,
+      allDeadBeltCount: aggregate.allDeadBeltCount,
       coralCount: corals.length,
-      coverCmTotal: round(
-        corals.reduce((sum, coral) => sum + coral.coverCm, 0),
-        1
-      ),
-      avgBleachIndex,
-      grade: bleachGrade(avgBleachIndex),
+      coverCmTotal,
+      liveCoverCm: round(coverCmTotal - deadCoverCm, 1),
+      deadCoverCm,
+      avgBleachIndex: aggregate.avgBleachIndex,
+      grade: aggregate.grade,
       fishTotal: payload.fishes
         .filter((fish) => beltIds.has(fish.beltId))
         .reduce((sum, fish) => sum + fish.count, 0)

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /**
  * 模块 6：/coverage 白化等级评定与覆盖度汇总
- * 汇总各样带的珊瑚覆盖率、白化指数与鱼类密度；查看结构版本并导入导出全量 JSON。
+ * 汇总各样带的活珊瑚覆盖率、死亡覆盖、白化指数与鱼类密度；查看结构版本并导入导出全量 JSON。
  * 复用 <BleachTag>、<FilterBar>。
  */
 import { computed, onMounted, ref } from 'vue'
@@ -69,16 +69,22 @@ const totals = computed(() => ({
   belts: rows.value.length,
   coralCount: rows.value.reduce((sum, row) => sum + row.coralCount, 0),
   coverCmTotal: rows.value.reduce((sum, row) => sum + row.coverCmTotal, 0),
+  liveCoverCm: rows.value.reduce((sum, row) => sum + row.liveCoverCm, 0),
+  deadCoverCm: rows.value.reduce((sum, row) => sum + row.deadCoverCm, 0),
   fishTotal: rows.value.reduce((sum, row) => sum + row.fishTotal, 0),
   avgCoveragePct:
     rows.value.length === 0
       ? 0
-      : Number((rows.value.reduce((sum, row) => sum + row.coveragePct, 0) / rows.value.length).toFixed(2)),
-  avgBleachIndex:
-    rows.value.length === 0
-      ? 0
-      : Number((rows.value.reduce((sum, row) => sum + row.bleachIndex, 0) / rows.value.length).toFixed(2)),
-  bleachedBelts: rows.value.filter((row) => row.bleachedSharePct > 0).length
+      : Number((rows.value.reduce((sum, row) => sum + row.liveCoveragePct, 0) / rows.value.length).toFixed(2)),
+  assessedBelts: rows.value.filter((row) => row.coralCount > 0).length,
+  allDeadBelts: rows.value.filter((row) => row.coralCount > 0 && row.bleachIndex === null).length,
+  avgBleachIndex: (() => {
+    const assessed = rows.value.filter((row) => row.bleachIndex !== null)
+    return assessed.length === 0
+      ? null
+      : Number((assessed.reduce((sum, row) => sum + (row.bleachIndex ?? 0), 0) / assessed.length).toFixed(2))
+  })(),
+  bleachedBelts: rows.value.filter((row) => row.bleachedSharePct > 0 || row.distribution.死亡 > 0).length
 }))
 
 /** 当前筛选结果内的白化等级分布 */
@@ -117,7 +123,10 @@ async function refresh(): Promise<void> {
     observer: row.observer,
     coralCount: row.coralCount,
     coverCmTotal: row.coverCmTotal,
-    coveragePct: row.coveragePct,
+    liveCoverCm: row.liveCoverCm,
+    deadCoverCm: row.deadCoverCm,
+    liveCoveragePct: row.liveCoveragePct,
+    deadCoveragePct: row.deadCoveragePct,
     bleachIndex: row.bleachIndex,
     grade: row.grade,
     bleachedSharePct: row.bleachedSharePct,
@@ -215,10 +224,16 @@ async function handleDatabaseReset(): Promise<void> {
 
 async function copySummary(): Promise<void> {
   const text = rows.value
-    .map(
-      (row) =>
-        `${row.reefName}｜站位 ${row.siteNo}｜样带 ${row.beltNo}（${row.orientation}向 ${row.lengthM} m）：珊瑚覆盖率 ${row.coveragePct}%，白化指数 ${row.bleachIndex}（${row.grade}），白化占比 ${row.bleachedSharePct}%，鱼类 ${row.fishTotal} 尾（${row.fishDensity} 尾/100m²）`
-    )
+    .map((row) => {
+      const bleachPart =
+        row.coralCount === 0
+          ? '无珊瑚记录，不参与礁区白化指数'
+          : row.bleachIndex === null
+            ? `样带珊瑚全部死亡，活珊瑚覆盖率 0%，死亡覆盖 ${row.deadCoverCm} cm（${row.deadCoveragePct}%），不参与礁区白化指数`
+            : `白化指数 ${row.bleachIndex}（${row.grade}，0 ~ 3），活珊瑚白化占比 ${row.bleachedSharePct}%`
+      const deadPart = row.deadCoverCm > 0 && row.bleachIndex !== null ? `，死亡覆盖 ${row.deadCoverCm} cm（${row.deadCoveragePct}%）` : ''
+      return `${row.reefName}｜站位 ${row.siteNo}｜样带 ${row.beltNo}（${row.orientation}向 ${row.lengthM} m）：活珊瑚覆盖率 ${row.liveCoveragePct}%（活 ${row.liveCoverCm} cm${deadPart}），${bleachPart}，鱼类 ${row.fishTotal} 尾（${row.fishDensity} 尾/100m²）`
+    })
     .join('\n')
   try {
     await navigator.clipboard.writeText(text)
@@ -249,7 +264,7 @@ onMounted(() => {
       <div>
         <h2 class="page__title">白化等级评定与覆盖度汇总</h2>
         <p class="gb-hint">
-          按样带汇总珊瑚覆盖率、白化指数（按覆盖长度加权，0 ~ 4）与鱼类密度，并可按礁区、白化等级筛选；同时提供结构版本查看与 JSON 导入导出。
+          按样带汇总活珊瑚覆盖率（仅无 / 轻 / 中 / 重，死亡单列）、白化指数（仅按无 / 轻 / 中 / 重加权，0 ~ 3）与鱼类密度，并可按礁区、白化等级筛选；同时提供结构版本查看与 JSON 导入导出。
         </p>
       </div>
       <div class="page__actions">
@@ -264,15 +279,17 @@ onMounted(() => {
     <div class="gb-stats-row">
       <StatBadge label="样带数" :value="totals.belts" suffix="条" icon="Files" />
       <StatBadge label="珊瑚记录" :value="totals.coralCount" suffix="条" tone="info" icon="Histogram" />
-      <StatBadge label="覆盖长度合计" :value="totals.coverCmTotal" suffix="cm" tone="success" icon="Odometer" />
-      <StatBadge label="平均覆盖率" :value="totals.avgCoveragePct" suffix="%" :percent="Math.min(100, totals.avgCoveragePct)" icon="PieChart" />
+      <StatBadge label="活珊瑚覆盖" :value="totals.liveCoverCm" suffix="cm" tone="success" icon="PieChart" />
+      <StatBadge label="死亡覆盖" :value="totals.deadCoverCm" suffix="cm" tone="danger" icon="WarningFilled" />
+      <StatBadge label="平均活珊瑚覆盖率" :value="totals.avgCoveragePct" suffix="%" :percent="Math.min(100, totals.avgCoveragePct)" icon="PieChart" />
       <StatBadge
         label="平均白化指数"
-        :value="totals.avgBleachIndex"
-        suffix="/ 4"
-        :tone="totals.avgBleachIndex > 1 ? 'warning' : 'success'"
-        :icon="totals.avgBleachIndex > 1 ? 'WarningFilled' : 'DataLine'"
+        :value="totals.avgBleachIndex === null ? '—' : totals.avgBleachIndex"
+        suffix="/ 3"
+        :tone="totals.avgBleachIndex !== null && totals.avgBleachIndex > 1 ? 'warning' : 'success'"
+        :icon="totals.avgBleachIndex !== null && totals.avgBleachIndex > 1 ? 'WarningFilled' : 'DataLine'"
       />
+      <StatBadge label="全死亡样带" :value="totals.allDeadBelts" suffix="条" tone="danger" icon="Warning" />
       <StatBadge label="鱼类合计" :value="totals.fishTotal" suffix="尾" tone="warning" icon="TrendCharts" />
     </div>
 
@@ -291,7 +308,7 @@ onMounted(() => {
         }
       ]"
       :has-switch="true"
-      switch-label="仅看存在白化的样带"
+      switch-label="仅看存在白化或死亡的样带"
       :switch-value="surveyStore.filter.onlyBleached"
       keyword-placeholder="搜索礁区 / 站位 / 样带 / 调查人"
       @change="handleFilterChange"
@@ -300,10 +317,14 @@ onMounted(() => {
 
     <el-card shadow="never" class="gb-panel">
       <div class="gb-panel-title">
-        <h3>白化等级分布（覆盖长度 cm）</h3>
+        <h3>白化等级分布（覆盖长度 cm，含死亡）</h3>
         <span class="gb-hint">
-          总体白化指数 {{ surveyStore.globalStats.bleachIndex }}（{{ surveyStore.globalStats.grade }}）· 白化占比
-          {{ surveyStore.globalStats.bleachedSharePct }}% · 存在白化样带 {{ totals.bleachedBelts }} 条
+          总体白化指数
+          {{ surveyStore.globalStats.bleachIndex === null ? '—' : surveyStore.globalStats.bleachIndex }}
+          （{{ surveyStore.globalStats.grade ?? '无评定' }}，0 ~ 3）· 活珊瑚白化占比
+          {{ surveyStore.globalStats.bleachedSharePct }}% · 活珊瑚覆盖 {{ surveyStore.globalStats.liveCoverCm }} cm ·
+          死亡覆盖 {{ surveyStore.globalStats.deadCoverCm }} cm · 全死亡样带 {{ totals.allDeadBelts }} 条 ·
+          存在白化 / 死亡样带 {{ totals.bleachedBelts }} 条
         </span>
       </div>
       <div class="gb-bars">
@@ -323,7 +344,7 @@ onMounted(() => {
     <el-card shadow="never" class="gb-panel">
       <div class="gb-panel-title">
         <h3>按样带的覆盖度成果（{{ rows.length }} 条）</h3>
-        <span class="gb-hint">按白化指数降序排列</span>
+        <span class="gb-hint">全死亡样带优先标出，其次按白化指数降序；无珊瑚记录样带不参与礁区白化指数</span>
       </div>
 
       <EmptyPanel
@@ -350,16 +371,26 @@ onMounted(() => {
             <span class="gb-mono">{{ row.coralCount }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="覆盖率" width="130" align="right">
+        <el-table-column label="活珊瑚覆盖率" width="150" align="right">
           <template #default="{ row }">
-            <span class="gb-mono">{{ row.coveragePct }}%</span>
-            <div class="gb-hint gb-mono">{{ row.coverCmTotal }} cm</div>
+            <span class="gb-mono">{{ row.liveCoveragePct }}%</span>
+            <div class="gb-hint gb-mono">活 {{ row.liveCoverCm }} cm</div>
           </template>
         </el-table-column>
-        <el-table-column label="白化评定" width="170">
+        <el-table-column label="死亡覆盖" width="140" align="right">
           <template #default="{ row }">
-            <BleachTag :level="row.grade" size="small" />
-            <div class="gb-hint gb-mono">指数 {{ row.bleachIndex }} · 白化占比 {{ row.bleachedSharePct }}%</div>
+            <span class="gb-mono" :class="{ 'page__dead-text': row.deadCoverCm > 0 }">{{ row.deadCoverCm }} cm</span>
+            <div class="gb-hint gb-mono" :class="{ 'page__dead-text': row.deadCoverCm > 0 }">{{ row.deadCoveragePct }}%</div>
+          </template>
+        </el-table-column>
+        <el-table-column label="白化评定" width="200">
+          <template #default="{ row }">
+            <BleachTag v-if="row.grade" :level="row.grade" size="small" />
+            <span v-else class="gb-hint">无珊瑚记录</span>
+            <div class="gb-hint gb-mono">
+              指数 {{ row.bleachIndex === null ? (row.coralCount > 0 ? '—（全死亡）' : '—') : row.bleachIndex }} ·
+              白化占比 {{ row.bleachedSharePct }}%
+            </div>
           </template>
         </el-table-column>
         <el-table-column label="白化等级分布 (cm)" min-width="220">
@@ -402,14 +433,15 @@ onMounted(() => {
     <el-card shadow="never" class="gb-panel">
       <div class="gb-panel-title">
         <h3>按礁区的白化评定</h3>
-        <span class="gb-hint">平均白化指数为礁区内各样带白化指数的算术平均</span>
+        <span class="gb-hint">平均白化指数仅统计有活珊瑚的样带（无珊瑚记录样带不计，全死亡样带单列）</span>
       </div>
       <el-table :data="reefSummaries" border stripe class="gb-table-compact">
         <el-table-column prop="reefName" label="礁区" min-width="160" />
         <el-table-column prop="protectStatus" label="保护区状态" width="130" />
-        <el-table-column label="站位 / 样带" width="130" align="right">
+        <el-table-column label="站位 / 样带" width="150" align="right">
           <template #default="{ row }">
             <span class="gb-mono">{{ row.siteCount }} / {{ row.beltCount }}</span>
+            <div class="gb-hint gb-mono">参评 {{ row.assessedBeltCount }} 条</div>
           </template>
         </el-table-column>
         <el-table-column label="珊瑚记录" width="110" align="right">
@@ -417,15 +449,22 @@ onMounted(() => {
             <span class="gb-mono">{{ row.coralCount }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="覆盖长度" width="130" align="right">
+        <el-table-column label="活珊瑚覆盖" width="130" align="right">
           <template #default="{ row }">
-            <span class="gb-mono">{{ row.coverCmTotal }} cm</span>
+            <span class="gb-mono">{{ row.liveCoverCm }} cm</span>
           </template>
         </el-table-column>
-        <el-table-column label="平均白化指数" width="160">
+        <el-table-column label="死亡覆盖" width="130" align="right">
           <template #default="{ row }">
-            <BleachTag :level="row.grade" size="small" />
-            <span class="gb-hint gb-mono"> {{ row.avgBleachIndex }}</span>
+            <span class="gb-mono" :class="{ 'page__dead-text': row.deadCoverCm > 0 }">{{ row.deadCoverCm }} cm</span>
+            <div v-if="row.allDeadBeltCount > 0" class="gb-hint gb-mono page__dead-text">全死亡 {{ row.allDeadBeltCount }} 条</div>
+          </template>
+        </el-table-column>
+        <el-table-column label="平均白化指数" width="170">
+          <template #default="{ row }">
+            <BleachTag v-if="row.grade" :level="row.grade" size="small" />
+            <span v-else class="gb-hint">无评定</span>
+            <span class="gb-hint gb-mono"> {{ row.avgBleachIndex === null ? '—' : row.avgBleachIndex }}</span>
           </template>
         </el-table-column>
         <el-table-column label="鱼类计数" width="120" align="right">
@@ -529,5 +568,9 @@ onMounted(() => {
 .page__mini-bar {
   display: block;
   height: 100%;
+}
+
+.page__dead-text {
+  color: #7b241c;
 }
 </style>
