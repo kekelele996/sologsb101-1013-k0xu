@@ -5,7 +5,7 @@
  */
 import { computed } from 'vue'
 import type { Component } from 'vue'
-import { DataLine, Files, Grid, Histogram, Odometer, PieChart, TrendCharts, WarningFilled } from '@element-plus/icons-vue'
+import { CircleCloseFilled, DataLine, Files, Grid, Histogram, Odometer, PieChart, TrendCharts, WarningFilled } from '@element-plus/icons-vue'
 
 type BadgeTone = 'default' | 'primary' | 'success' | 'warning' | 'danger' | 'info'
 
@@ -48,7 +48,8 @@ const iconMap: Record<string, Component> = {
   Odometer,
   PieChart,
   TrendCharts,
-  WarningFilled
+  WarningFilled,
+  CircleCloseFilled
 }
 
 const iconComponent = computed<Component>(() => iconMap[props.icon] ?? DataLine)

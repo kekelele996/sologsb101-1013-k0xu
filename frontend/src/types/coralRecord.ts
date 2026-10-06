@@ -3,7 +3,10 @@ export type CoralForm = '枝状' | '块状' | '叶状' | '软珊瑚'
 
 export const CORAL_FORMS: CoralForm[] = ['枝状', '块状', '叶状', '软珊瑚']
 
-/** 白化等级 */
+/**
+ * 白化等级：无 / 轻 / 中 / 重 为活珊瑚等级（计入活珊瑚覆盖率与白化指数），
+ * 死亡与活珊瑚分开统计：不计入活珊瑚覆盖率、不参与白化指数，只累计死亡覆盖长度。
+ */
 export type BleachLevel = '无' | '轻' | '中' | '重' | '死亡'
 
 export const BLEACH_LEVELS: BleachLevel[] = ['无', '轻', '中', '重', '死亡']

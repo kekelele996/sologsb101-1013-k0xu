@@ -40,7 +40,7 @@ const form = reactive({
   manager: ''
 })
 
-/** 礁区卡片：汇总站位/样带/珊瑚记录数与平均白化指数 */
+/** 礁区卡片：汇总站位/样带/珊瑚记录数与平均白化指数（仅活珊瑚加权，无记录不参评） */
 const cards = computed(() =>
   reefStore.filteredReefs.map((reef: Reef) => {
     const sites = reefStore.sites.filter((site) => site.reefId === reef.id)
@@ -49,12 +49,28 @@ const cards = computed(() =>
     const beltIds = new Set(belts.map((belt) => belt.id))
     const corals = surveyStore.corals.filter((coral) => beltIds.has(coral.beltId))
     const fishes = surveyStore.fishes.filter((fish) => beltIds.has(fish.beltId))
-    const index = bleachIndex(corals)
+    const liveCover = corals.filter((coral) => coral.bleachLevel !== '死亡')
+    const liveCoverCm = liveCover.reduce((sum, coral) => sum + coral.coverCm, 0)
+    const deadCoverCm = corals
+      .filter((coral) => coral.bleachLevel === '死亡')
+      .reduce((sum, coral) => sum + coral.coverCm, 0)
+    // 无珊瑚记录的样带不进礁区白化指数：这里按样带分别算指数后，仅对有活珊瑚的样带取平均
+    const beltIndices = belts.map((belt) => {
+      const beltCorals = corals.filter((coral) => coral.beltId === belt.id)
+      const hasLive = beltCorals.some((coral) => coral.bleachLevel !== '死亡')
+      return beltCorals.length > 0 && hasLive ? bleachIndex(beltCorals) : null
+    })
+    const rated = beltIndices.filter((value): value is number => value !== null)
+    const index = rated.length === 0 ? 0 : Number((rated.reduce((sum, value) => sum + value, 0) / rated.length).toFixed(2))
     return {
       reef,
       siteCount: sites.length,
       beltCount: belts.length,
       coralCount: corals.length,
+      liveCoverCm,
+      deadCoverCm,
+      hasCorals: corals.length > 0,
+      allDead: corals.length > 0 && liveCover.length === 0,
       fishTotal: fishes.reduce((sum, fish) => sum + fish.count, 0),
       bleachIndex: index,
       grade: bleachGrade(index)
@@ -279,7 +295,9 @@ watch(
               <strong class="reef-card__name">{{ card.reef.name }}</strong>
               <el-tag size="small" effect="plain" class="reef-card__status">{{ card.reef.protectStatus }}</el-tag>
             </div>
-            <BleachTag :level="card.grade" size="small" />
+            <el-tag v-if="!card.hasCorals" size="small" type="info" effect="plain">无珊瑚记录</el-tag>
+            <el-tag v-else-if="card.allDead" size="small" type="danger">全死亡</el-tag>
+            <BleachTag v-else :level="card.grade" size="small" />
           </div>
         </template>
 
@@ -290,7 +308,7 @@ watch(
           <StatBadge
             label="白化指数"
             :value="card.bleachIndex"
-            suffix="/ 4"
+            suffix="/ 3"
             size="small"
             :tone="card.bleachIndex > 1 ? 'warning' : 'success'"
             icon="TrendCharts"
@@ -299,6 +317,8 @@ watch(
 
         <div class="reef-card__meta">
           <span>面积 <b class="gb-mono">{{ card.reef.areaKm2 }}</b> km²</span>
+          <span>活珊瑚 <b class="gb-mono">{{ card.liveCoverCm }}</b> cm</span>
+          <span :class="{ 'reef-card__dead': card.deadCoverCm > 0 }">死亡 <b class="gb-mono">{{ card.deadCoverCm }}</b> cm</span>
           <span>鱼获计数 <b class="gb-mono">{{ card.fishTotal }}</b></span>
           <span v-if="card.reef.manager">管理单位：{{ card.reef.manager }}</span>
         </div>
@@ -421,6 +441,11 @@ watch(
   gap: 14px;
   font-size: 13px;
   color: #4c6663;
+}
+
+.reef-card__dead {
+  color: #c0392b;
+  font-weight: 600;
 }
 
 .reef-card__location {

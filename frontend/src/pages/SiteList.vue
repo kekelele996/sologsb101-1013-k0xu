@@ -57,11 +57,14 @@ const rows = computed(() => {
     const beltIds = new Set(belts.map((belt) => belt.id))
     const corals = surveyStore.corals.filter((coral) => beltIds.has(coral.beltId))
     const index = bleachIndex(corals)
+    const hasLiveCorals = corals.some((coral) => coral.bleachLevel !== '死亡')
     return {
       site,
       beltCount: belts.length,
       beltLengthM: belts.reduce((sum, belt) => sum + belt.lengthM, 0),
       coralCount: corals.length,
+      hasCorals: corals.length > 0,
+      allDead: corals.length > 0 && !hasLiveCorals,
       bleachIndex: index,
       grade: bleachGrade(index)
     }
@@ -303,10 +306,14 @@ onMounted(() => {
             <span class="gb-mono">{{ row.coralCount }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="平均白化" width="150">
+        <el-table-column label="平均白化" width="170">
           <template #default="{ row }">
-            <BleachTag :level="row.grade" :size="'small'" />
-            <span class="gb-hint gb-mono"> {{ row.bleachIndex }}</span>
+            <el-tag v-if="!row.hasCorals" size="small" type="info" effect="plain">无记录</el-tag>
+            <el-tag v-else-if="row.allDead" size="small" type="danger">全死亡</el-tag>
+            <template v-else>
+              <BleachTag :level="row.grade" :size="'small'" />
+              <span class="gb-hint gb-mono"> {{ row.bleachIndex }}</span>
+            </template>
           </template>
         </el-table-column>
         <el-table-column label="操作" width="240" fixed="right">

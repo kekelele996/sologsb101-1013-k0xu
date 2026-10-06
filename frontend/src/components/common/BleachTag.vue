@@ -43,6 +43,9 @@ const style = computed(() => ({
 }))
 
 const tip = computed(() => {
+  if (props.level === '死亡') {
+    return `死亡珊瑚（单列死亡覆盖，不计入活珊瑚覆盖率与白化指数）${props.coverCm === undefined ? '' : `，覆盖 ${props.coverCm} cm`}`
+  }
   const weight = BLEACH_WEIGHT[props.level]
   return `白化等级「${props.level}」（权重 ${weight}）${props.coverCm === undefined ? '' : `，覆盖 ${props.coverCm} cm`}`
 })

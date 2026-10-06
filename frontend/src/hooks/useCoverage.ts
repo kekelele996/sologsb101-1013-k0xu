@@ -14,13 +14,15 @@ import type { FishCount } from '@/types/fishCount'
 import {
   bleachGrade,
   bleachIndex,
-  bleachedSharePct,
-  coralCoveragePct,
+  deadCoralCoveragePct,
   fishDensity,
   groupByForm,
   groupByGenus,
-  round
+  liveCoralCoveragePct,
+  round,
+  summarizeCorals
 } from '@/utils/bleach'
+import type { LiveBleachLevel } from '@/utils/bleach'
 
 /** 单条样带的覆盖度成果 */
 export interface BeltCoverage {
@@ -35,15 +37,26 @@ export interface BeltCoverage {
   surveyDate: string
   observer: string
   coralCount: number
+  /** 活珊瑚覆盖长度（cm） */
+  liveCoverCm: number
+  /** 死亡珊瑚覆盖长度（cm） */
+  deadCoverCm: number
+  /** 活+死覆盖长度合计（cm） */
   coverCmTotal: number
-  /** 珊瑚覆盖率（%） */
-  coveragePct: number
-  /** 白化指数 0 ~ 4 */
+  /** 是否有珊瑚记录（含死亡） */
+  hasCorals: boolean
+  /** 有珊瑚记录且全部死亡 */
+  allDead: boolean
+  /** 活珊瑚覆盖率（%，死亡不计入） */
+  liveCoveragePct: number
+  /** 死亡珊瑚覆盖率（%） */
+  deadCoveragePct: number
+  /** 白化指数 0 ~ 3（仅活珊瑚加权，无活珊瑚记 0） */
   bleachIndex: number
-  grade: BleachLevel
-  /** 白化占比（%） */
+  grade: LiveBleachLevel
+  /** 白化占比（%，占活珊瑚） */
   bleachedSharePct: number
-  /** 各白化等级累计覆盖长度 */
+  /** 各白化等级（含死亡）累计覆盖长度 */
   distribution: Record<BleachLevel, number>
   /** 按属名分组的覆盖长度 */
   byGenus: Array<{ genus: string; coverCm: number }>
@@ -63,12 +76,19 @@ export interface SiteCoverage {
   reefName: string
   depthM: number
   beltCount: number
+  /** 有珊瑚记录（含死亡）的样带数 */
+  surveyedBeltCount: number
   coralCount: number
+  /** 活珊瑚覆盖长度（cm） */
+  liveCoverCm: number
+  /** 死亡珊瑚覆盖长度（cm） */
+  deadCoverCm: number
   coverCmTotal: number
-  /** 站位平均覆盖率（各样本带覆盖率均值） */
+  /** 站位平均活珊瑚覆盖率（各样本带覆盖率均值） */
   avgCoveragePct: number
+  /** 站位平均白化指数（无珊瑚记录样带不参与） */
   avgBleachIndex: number
-  grade: BleachLevel
+  grade: LiveBleachLevel
   bleachedSharePct: number
   fishTotal: number
   invertebrateTotal: number
@@ -132,18 +152,7 @@ export function useCoverage(): UseCoverageResult {
     const reef = site ? reefOf(site.reefId) : null
     const beltCorals = corals.value.filter((coral) => coral.beltId === belt.id)
     const beltFishes = fishes.value.filter((fish) => fish.beltId === belt.id)
-    const coverCmTotal = round(
-      beltCorals.reduce((sum, coral) => sum + coral.coverCm, 0),
-      1
-    )
-    const index = bleachIndex(beltCorals)
-    const distribution = EMPTY_DISTRIBUTION()
-    BLEACH_LEVELS.forEach((level) => {
-      distribution[level] = round(
-        beltCorals.filter((coral) => coral.bleachLevel === level).reduce((sum, coral) => sum + coral.coverCm, 0),
-        1
-      )
-    })
+    const summary = summarizeCorals(beltCorals, BLEACH_LEVELS)
     const fishTotal = beltFishes.filter((fish) => fish.category === '鱼类').reduce((sum, fish) => sum + fish.count, 0)
     const invertebrateTotal = beltFishes
       .filter((fish) => fish.category === '无脊椎动物')
@@ -160,12 +169,17 @@ export function useCoverage(): UseCoverageResult {
       surveyDate: belt.surveyDate,
       observer: belt.observer,
       coralCount: beltCorals.length,
-      coverCmTotal,
-      coveragePct: coralCoveragePct(coverCmTotal, belt.lengthM),
-      bleachIndex: index,
-      grade: bleachGrade(index),
-      bleachedSharePct: bleachedSharePct(beltCorals),
-      distribution,
+      liveCoverCm: summary.liveCoverCm,
+      deadCoverCm: summary.deadCoverCm,
+      coverCmTotal: summary.coverCmTotal,
+      hasCorals: summary.hasCorals,
+      allDead: summary.allDead,
+      liveCoveragePct: liveCoralCoveragePct(summary.liveCoverCm, belt.lengthM),
+      deadCoveragePct: deadCoralCoveragePct(summary.deadCoverCm, belt.lengthM),
+      bleachIndex: summary.bleachIndex,
+      grade: summary.grade,
+      bleachedSharePct: summary.bleachedSharePct,
+      distribution: summary.distribution,
       byGenus: groupByGenus(beltCorals),
       byForm: groupByForm(beltCorals),
       fishTotal,
@@ -182,7 +196,11 @@ export function useCoverage(): UseCoverageResult {
     belts.value
       .map((belt) => buildBeltCoverage(belt.id))
       .filter((item): item is BeltCoverage => item !== null)
-      .sort((a, b) => b.bleachIndex - a.bleachIndex)
+      // 无珊瑚记录样带不参与白化排名，排到最后；其余按白化指数降序
+      .sort((a, b) => {
+        if (a.hasCorals !== b.hasCorals) return a.hasCorals ? -1 : 1
+        return b.bleachIndex - a.bleachIndex
+      })
   )
 
   function buildSiteCoverage(siteId: string): SiteCoverage | null {
@@ -193,18 +211,21 @@ export function useCoverage(): UseCoverageResult {
     const beltIds = new Set(siteBelts.map((belt) => belt.id))
     const siteCorals = corals.value.filter((coral) => beltIds.has(coral.beltId))
     const siteFishes = fishes.value.filter((fish) => beltIds.has(fish.beltId))
-    const coverCmTotal = round(
-      siteCorals.reduce((sum, coral) => sum + coral.coverCm, 0),
-      1
-    )
+    const summary = summarizeCorals(siteCorals, BLEACH_LEVELS)
+    // 各样本带活珊瑚覆盖率均值（含无记录样带，按 0 参与站位均值）
     const coverages = siteBelts.map((belt) => {
       const beltCorals = siteCorals.filter((coral) => coral.beltId === belt.id)
-      return coralCoveragePct(
-        beltCorals.reduce((sum, coral) => sum + coral.coverCm, 0),
-        belt.lengthM
-      )
+      const beltSummary = summarizeCorals(beltCorals, BLEACH_LEVELS)
+      return liveCoralCoveragePct(beltSummary.liveCoverCm, belt.lengthM)
     })
-    const indices = siteBelts.map((belt) => bleachIndex(siteCorals.filter((coral) => coral.beltId === belt.id)))
+    // 无珊瑚记录的样带不进站位白化指数
+    const indices = siteBelts
+      .map((belt) => {
+        const beltCorals = siteCorals.filter((coral) => coral.beltId === belt.id)
+        return { beltCorals, index: bleachIndex(beltCorals) }
+      })
+      .filter((entry) => entry.beltCorals.length > 0 && entry.beltCorals.some((coral) => coral.bleachLevel !== '死亡'))
+      .map((entry) => entry.index)
     const avgBleachIndex =
       indices.length === 0 ? 0 : round(indices.reduce((sum, value) => sum + value, 0) / indices.length, 2)
     const fishTotal = siteFishes.filter((fish) => fish.category === '鱼类').reduce((sum, fish) => sum + fish.count, 0)
@@ -216,13 +237,18 @@ export function useCoverage(): UseCoverageResult {
       reefName: reef?.name ?? '未知礁区',
       depthM: site.depthM,
       beltCount: siteBelts.length,
+      surveyedBeltCount: siteBelts.filter((belt) =>
+        siteCorals.some((coral) => coral.beltId === belt.id)
+      ).length,
       coralCount: siteCorals.length,
-      coverCmTotal,
+      liveCoverCm: summary.liveCoverCm,
+      deadCoverCm: summary.deadCoverCm,
+      coverCmTotal: summary.coverCmTotal,
       avgCoveragePct:
         coverages.length === 0 ? 0 : round(coverages.reduce((sum, value) => sum + value, 0) / coverages.length, 2),
       avgBleachIndex,
       grade: bleachGrade(avgBleachIndex),
-      bleachedSharePct: bleachedSharePct(siteCorals),
+      bleachedSharePct: summary.bleachedSharePct,
       fishTotal,
       invertebrateTotal: siteFishes
         .filter((fish) => fish.category === '无脊椎动物')
@@ -239,7 +265,13 @@ export function useCoverage(): UseCoverageResult {
     sites.value
       .map((site) => buildSiteCoverage(site.id))
       .filter((item): item is SiteCoverage => item !== null)
-      .sort((a, b) => b.avgBleachIndex - a.avgBleachIndex)
+      // 没有有珊瑚记录样带的站位不参与白化排名，排到最后
+      .sort((a, b) => {
+        if ((a.surveyedBeltCount > 0) !== (b.surveyedBeltCount > 0)) {
+          return a.surveyedBeltCount > 0 ? -1 : 1
+        }
+        return b.avgBleachIndex - a.avgBleachIndex
+      })
   )
 
   const globalDistribution = computed<Record<BleachLevel, number>>(() => {

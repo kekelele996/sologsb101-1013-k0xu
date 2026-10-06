@@ -11,7 +11,13 @@ import type { CountCategory, FishCount, SizeClass } from '@/types/fishCount'
 import type { Reef } from '@/types/reef'
 import type { Site } from '@/types/site'
 import type { Belt } from '@/types/belt'
-import { bleachGrade, bleachIndex, bleachedSharePct, coralCoveragePct, fishDensity, round } from '@/utils/bleach'
+import {
+  deadCoralCoveragePct,
+  liveCoralCoveragePct,
+  fishDensity,
+  summarizeCorals
+} from '@/utils/bleach'
+import type { LiveBleachLevel } from '@/utils/bleach'
 
 /** 覆盖度汇总页筛选条件 */
 export interface SurveyFilterState {
@@ -44,10 +50,22 @@ export interface CoverageSummaryRow {
   surveyDate: string
   observer: string
   coralCount: number
+  /** 活珊瑚覆盖长度（cm，无/轻/中/重） */
+  liveCoverCm: number
+  /** 死亡珊瑚覆盖长度（cm） */
+  deadCoverCm: number
+  /** 活+死覆盖长度合计（cm，分布条分母） */
   coverCmTotal: number
-  coveragePct: number
+  /** 活珊瑚覆盖率（%，死亡不计入） */
+  liveCoveragePct: number
+  /** 死亡珊瑚覆盖率（%） */
+  deadCoveragePct: number
+  /** 是否有珊瑚记录（含死亡） */
+  hasCorals: boolean
+  /** 有珊瑚记录且全部死亡 */
+  allDead: boolean
   bleachIndex: number
-  grade: BleachLevel
+  grade: LiveBleachLevel
   bleachedSharePct: number
   distribution: Record<BleachLevel, number>
   fishTotal: number
@@ -137,7 +155,7 @@ export const useSurveyStore = defineStore('survey', () => {
     return counts
   })
 
-  /** 覆盖度汇总行（全部样带） */
+  /** 覆盖度汇总行（全部样带；白化指数降序，无记录样带排在最后） */
   const coverageRows = computed<CoverageSummaryRow[]>(() =>
     belts.value
       .map((belt) => {
@@ -145,18 +163,7 @@ export const useSurveyStore = defineStore('survey', () => {
         const reef = site ? reefs.value.find((item) => item.id === site.reefId) : undefined
         const beltCorals = corals.value.filter((coral) => coral.beltId === belt.id)
         const beltFishes = fishes.value.filter((fish) => fish.beltId === belt.id)
-        const coverCmTotal = round(
-          beltCorals.reduce((sum, coral) => sum + coral.coverCm, 0),
-          1
-        )
-        const distribution: Record<BleachLevel, number> = { 无: 0, 轻: 0, 中: 0, 重: 0, 死亡: 0 }
-        BLEACH_LEVELS.forEach((level) => {
-          distribution[level] = round(
-            beltCorals.filter((coral) => coral.bleachLevel === level).reduce((sum, coral) => sum + coral.coverCm, 0),
-            1
-          )
-        })
-        const index = bleachIndex(beltCorals)
+        const summary = summarizeCorals(beltCorals, BLEACH_LEVELS)
         const fishTotal = beltFishes.filter((fish) => fish.category === '鱼类').reduce((sum, fish) => sum + fish.count, 0)
         return {
           beltId: belt.id,
@@ -170,12 +177,17 @@ export const useSurveyStore = defineStore('survey', () => {
           surveyDate: belt.surveyDate,
           observer: belt.observer,
           coralCount: beltCorals.length,
-          coverCmTotal,
-          coveragePct: coralCoveragePct(coverCmTotal, belt.lengthM),
-          bleachIndex: index,
-          grade: bleachGrade(index),
-          bleachedSharePct: bleachedSharePct(beltCorals),
-          distribution,
+          liveCoverCm: summary.liveCoverCm,
+          deadCoverCm: summary.deadCoverCm,
+          coverCmTotal: summary.coverCmTotal,
+          liveCoveragePct: liveCoralCoveragePct(summary.liveCoverCm, belt.lengthM),
+          deadCoveragePct: deadCoralCoveragePct(summary.deadCoverCm, belt.lengthM),
+          hasCorals: summary.hasCorals,
+          allDead: summary.allDead,
+          bleachIndex: summary.bleachIndex,
+          grade: summary.grade,
+          bleachedSharePct: summary.bleachedSharePct,
+          distribution: summary.distribution,
           fishTotal,
           invertebrateTotal: beltFishes
             .filter((fish) => fish.category === '无脊椎动物')
@@ -183,7 +195,11 @@ export const useSurveyStore = defineStore('survey', () => {
           fishDensity: fishDensity(fishTotal, belt.lengthM)
         }
       })
-      .sort((a, b) => b.bleachIndex - a.bleachIndex)
+      .sort((a, b) => {
+        // 没有珊瑚记录的样带不参与白化排名，统一排到最后
+        if (a.hasCorals !== b.hasCorals) return a.hasCorals ? -1 : 1
+        return b.bleachIndex - a.bleachIndex
+      })
   )
 
   /** 按筛选条件过滤后的覆盖度行 */
@@ -212,27 +228,19 @@ export const useSurveyStore = defineStore('survey', () => {
       filter.value.onlyBleached
   )
 
-  /** 全局白化等级分布与总体指数 */
+  /** 全局白化等级分布与总体指数（白化指数仅按活珊瑚加权） */
   const globalStats = computed(() => {
-    const distribution: Record<BleachLevel, number> = { 无: 0, 轻: 0, 中: 0, 重: 0, 死亡: 0 }
-    BLEACH_LEVELS.forEach((level) => {
-      distribution[level] = round(
-        corals.value.filter((coral) => coral.bleachLevel === level).reduce((sum, coral) => sum + coral.coverCm, 0),
-        1
-      )
-    })
-    const index = bleachIndex(corals.value)
+    const summary = summarizeCorals(corals.value, BLEACH_LEVELS)
     return {
       coralCount: corals.value.length,
       fishCount: fishes.value.length,
-      coverCmTotal: round(
-        corals.value.reduce((sum, coral) => sum + coral.coverCm, 0),
-        1
-      ),
-      bleachIndex: index,
-      grade: bleachGrade(index),
-      bleachedSharePct: bleachedSharePct(corals.value),
-      distribution
+      liveCoverCm: summary.liveCoverCm,
+      deadCoverCm: summary.deadCoverCm,
+      coverCmTotal: summary.coverCmTotal,
+      bleachIndex: summary.bleachIndex,
+      grade: summary.grade,
+      bleachedSharePct: summary.bleachedSharePct,
+      distribution: summary.distribution
     }
   })
 

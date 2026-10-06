@@ -145,8 +145,9 @@ interface SeedBelt {
 }
 
 /**
- * 播种演示数据：3 个礁区 → 4 个站位 → 5 条样带 → 14 条珊瑚记录 + 12 条鱼类计数，
- * 覆盖无 / 轻 / 中 / 重 / 死亡 全部白化等级，保证每个页面打开都有内容、层级路由也能命中真实 id。
+ * 播种演示数据：3 个礁区 → 4 个站位 → 7 条样带 → 16 条珊瑚记录 + 14 条鱼类计数，
+ * 覆盖无 / 轻 / 中 / 重 / 死亡 全部白化等级，并含 1 条全死亡样带与 1 条无珊瑚记录样带，
+ * 保证每个页面打开都有内容、层级路由也能命中真实 id。
  */
 export async function seedDemoData(): Promise<void> {
   const now = Date.now()
@@ -310,6 +311,37 @@ export async function seedDemoData(): Promise<void> {
       fishes: [
         { id: 'fsh_dz01a_1', beltId: 'belt_dz01_a', family: '雀鲷科', count: 34, sizeClass: '0-10cm', category: '鱼类' },
         { id: 'fsh_dz01a_2', beltId: 'belt_dz01_a', family: '海星科', count: 5, sizeClass: '11-20cm', category: '无脊椎动物' }
+      ]
+    },
+    {
+      id: 'belt_dz01_b',
+      siteId: 'site_dz_01',
+      no: 'T-02',
+      lengthM: 25,
+      orientation: '北',
+      surveyDate: today,
+      observer: '陈立群',
+      // 全死亡样带：活珊瑚覆盖率记 0%，死亡覆盖单列，不进白化指数
+      corals: [
+        { id: 'cor_dz01b_1', beltId: 'belt_dz01_b', genus: '鹿角珊瑚属', form: '枝状', coverCm: 840, bleachLevel: '死亡', remark: '仅剩骨骼' },
+        { id: 'cor_dz01b_2', beltId: 'belt_dz01_b', genus: '蜂巢珊瑚属', form: '块状', coverCm: 460, bleachLevel: '死亡', remark: '骨骼附着藻类' }
+      ],
+      fishes: [
+        { id: 'fsh_dz01b_1', beltId: 'belt_dz01_b', family: '雀鲷科', count: 12, sizeClass: '0-10cm', category: '鱼类' }
+      ]
+    },
+    {
+      id: 'belt_ql02_b',
+      siteId: 'site_ql_02',
+      no: 'T-02',
+      lengthM: 30,
+      orientation: '北',
+      surveyDate: today,
+      observer: '周渝',
+      // 尚无珊瑚记录的样带：不参与礁区白化指数
+      corals: [],
+      fishes: [
+        { id: 'fsh_ql02b_1', beltId: 'belt_ql02_b', family: '刺尾鱼科', count: 9, sizeClass: '11-20cm', category: '鱼类' }
       ]
     }
   ]
